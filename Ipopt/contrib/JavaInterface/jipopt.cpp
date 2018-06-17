@@ -3,7 +3,7 @@
  * All Rights Reserved.
  * This code is published under the Eclipse Public License.
  *
- * $Id$
+ * $Id: jipopt.cpp 2513 2014-12-19 13:20:51Z stefan $
  */
 
 #include <cassert>
@@ -54,6 +54,11 @@ public:
    /** Method to return the constraint residuals */
    virtual bool eval_g(Index n, const Number* x, bool new_x, Index m, Number* g);
 
+
+   virtual bool intermediateCallback();
+
+   virtual bool finalizeSolution(Index n, const Number *x);
+
    /** Method to return:
     *   1) The structure of the jacobian (if "values" is NULL)
     *   2) The values of the jacobian (if "values" is not NULL)
@@ -70,6 +75,12 @@ public:
       Number obj_factor, Index m, const Number* lambda,
       bool new_lambda, Index nele_hess, Index* iRow,
       Index* jCol, Number* values);
+
+   virtual bool intermediate_callback(AlgorithmMode mode, Index iter, Number obj_value,
+		   Number inf_pr, Number inf_du, Number mu, Number d_norm, 
+		   Number regularization_size, Number alpha_du, Number alpha_pr, Index ls_trials, 
+		   const IpoptData* ip_data, IpoptCalculatedQuantities* ip_cq);
+
 
    //@}
 
@@ -153,6 +164,9 @@ public:
    jmethodID eval_jac_g_;
    jmethodID eval_h_;
 
+   jmethodID intermediateCallback_;
+   jmethodID finalizeSolution_;
+
    jmethodID get_scaling_parameters_;
    jmethodID get_number_of_nonlinear_variables_;
    jmethodID get_list_of_nonlinear_variables_;
@@ -185,10 +199,12 @@ Jipopt::Jipopt(JNIEnv *env_, jobject solver_, jint n_, jint m_, jint nele_jac_, 
    get_scaling_parameters_ = env->GetMethodID(solverCls,"get_scaling_parameters","([DI[DI[D[Z)Z");
    get_number_of_nonlinear_variables_ = env->GetMethodID(solverCls,"get_number_of_nonlinear_variables","()I");
    get_list_of_nonlinear_variables_ = env->GetMethodID(solverCls,"get_list_of_nonlinear_variables","(I[I)Z");
+   intermediateCallback_ = env->GetMethodID(solverCls, "intermediateCallback", "()Z");
+   finalizeSolution_ = env->GetMethodID(solverCls, "finalizeSolution", "(I[D)Z");
 
    if( get_bounds_info_ == 0 || get_starting_point_ == 0 ||
       eval_f_ == 0 || eval_grad_f_ == 0 || eval_g_ == 0 || eval_jac_g_ == 0 || eval_h_ == 0 ||
-      get_scaling_parameters_ == 0 || get_number_of_nonlinear_variables_ == 0 || get_list_of_nonlinear_variables_ == 0 )
+      get_scaling_parameters_ == 0 || get_number_of_nonlinear_variables_ == 0 || get_list_of_nonlinear_variables_ == 0  || intermediateCallback_ == 0 || finalizeSolution_ == 0)
       std::cerr << "Expected callback methods missing on JIpopt.java" << std::endl;
 }
 
@@ -312,6 +328,26 @@ bool Jipopt::eval_g(Index n, const Number* x, bool new_x, Index m, Number* g)
    return true;
 }
 
+bool Jipopt::intermediateCallback()
+{
+	if (!env->CallBooleanMethod(solver, intermediateCallback_))
+		return false;
+
+	return true;
+}
+
+bool Jipopt::finalizeSolution(Index n, const Number *x)
+{
+	if (x != NULL )
+		env->SetDoubleArrayRegion(xj, 0, n, const_cast<Number*>(x));
+
+	/* Call the java method */
+	if ( !env->CallBooleanMethod(solver, finalizeSolution_, n, xj) )
+		return false;
+
+	return true;
+}
+
 bool Jipopt::eval_jac_g(Index n, const Number* x, bool new_x,
    Index m, Index nele_jac, Index* iRow,
    Index *jCol, Number* jac_g)
@@ -422,6 +458,14 @@ bool Jipopt::eval_h(Index n, const Number* x, bool new_x,
    return true;
 }
 
+bool Jipopt::intermediate_callback(AlgorithmMode mode, Index iter, Number obj_value, 
+		Number inf_pr, Number inf_du, Number mu, Number d_norm, Number regularization_size,
+		Number alpha_du, Number alpha_pr, Index ls_trials, const IpoptData* ip_data,
+		IpoptCalculatedQuantities* ip_cq)
+{
+	return intermediateCallback();
+}
+
 void Jipopt::finalize_solution(SolverReturn status, Index n, const Number *x, 
    const Number *z_L, const Number *z_U, Index m,
    const Number *g, const Number *lambda, Number obj_value,
@@ -445,6 +489,8 @@ void Jipopt::finalize_solution(SolverReturn status, Index n, const Number *x,
       env->SetDoubleArrayRegion(mult_gj, 0, m, const_cast<Number*>(lambda));
 
    env->GetDoubleArrayRegion(fj, 0, 1, &obj_value);
+
+   finalizeSolution(n, x);
 }
 
 /** overload this method to return scaling parameters. This is
